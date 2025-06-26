@@ -26,6 +26,20 @@ interface ImageGenerationResult {
 const LUMA_API_URL = 'https://api.lumalabs.ai/dream-machine/v1/generations';
 const OPENAI_API_URL = 'https://api.openai.com/v1/images/generations';
 
+// Helper function to get environment variable with fallback
+function getEnvVar(key: string): string | null {
+  // Try to get from Deno environment first (Supabase secrets)
+  let value = Deno.env.get(key);
+  
+  if (!value) {
+    console.warn(`⚠️ Environment variable ${key} not found in Deno.env`);
+    return null;
+  }
+  
+  console.log(`✅ Found environment variable ${key}`);
+  return value;
+}
+
 // Helper function to convert aspect ratio to size format based on model
 function aspectRatioToSize(aspectRatio: string, model: string): string {
   if (model === 'gpt-image-1') {
@@ -107,12 +121,17 @@ Deno.serve(async (req: Request) => {
       // Create new generation
       const options: ImageGenerationOptions = await req.json();
       
+      console.log(`🚀 Starting image generation with options:`, JSON.stringify(options, null, 2));
+      
       // Check if this is an OpenAI request (DALL-E 3 or GPT Image 1)
       if (options.model === 'dall-e-3' || options.model === 'gpt-image-1') {
-        const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+        const OPENAI_API_KEY = getEnvVar('OPENAI_API_KEY');
         if (!OPENAI_API_KEY) {
+          console.error('❌ OPENAI_API_KEY not found in environment variables');
           return new Response(
-            JSON.stringify({ error: 'OPENAI_API_KEY environment variable is not set' }),
+            JSON.stringify({ 
+              error: 'OPENAI_API_KEY environment variable is not set. Please add it to your Supabase Edge Function secrets.' 
+            }),
             {
               status: 500,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -225,10 +244,14 @@ Deno.serve(async (req: Request) => {
         );
       } else {
         // Handle Luma Labs request
-        const LUMA_API_KEY = Deno.env.get('LUMA_API_KEY');
+        const LUMA_API_KEY = getEnvVar('LUMA_API_KEY');
         if (!LUMA_API_KEY) {
+          console.error('❌ LUMA_API_KEY not found in environment variables');
+          console.log('📋 Available environment variables:', Object.keys(Deno.env.toObject()));
           return new Response(
-            JSON.stringify({ error: 'LUMA_API_KEY environment variable is not set' }),
+            JSON.stringify({ 
+              error: 'LUMA_API_KEY environment variable is not set. Please add it to your Supabase Edge Function secrets and ensure it is linked to this function.' 
+            }),
             {
               status: 500,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -248,6 +271,8 @@ Deno.serve(async (req: Request) => {
           payload.quality = mapQualityForLuma(options.quality);
         }
 
+        console.log(`🚀 Making Luma API request with payload:`, JSON.stringify(payload, null, 2));
+
         const response = await fetch(LUMA_API_URL, {
           method: 'POST',
           headers: {
@@ -259,6 +284,7 @@ Deno.serve(async (req: Request) => {
 
         if (!response.ok) {
           const errorText = await response.text();
+          console.error(`❌ Luma API Error (${response.status}):`, errorText);
           let errorMessage = `Luma API request failed: ${response.status}`;
           
           try {
@@ -278,6 +304,7 @@ Deno.serve(async (req: Request) => {
         }
 
         const data = await response.json();
+        console.log(`✅ Luma API Response:`, JSON.stringify(data, null, 2));
         
         return new Response(
           JSON.stringify(data),
@@ -301,16 +328,21 @@ Deno.serve(async (req: Request) => {
       }
 
       // Get Luma generation status
-      const LUMA_API_KEY = Deno.env.get('LUMA_API_KEY');
+      const LUMA_API_KEY = getEnvVar('LUMA_API_KEY');
       if (!LUMA_API_KEY) {
+        console.error('❌ LUMA_API_KEY not found in environment variables for status check');
         return new Response(
-          JSON.stringify({ error: 'LUMA_API_KEY environment variable is not set' }),
+          JSON.stringify({ 
+            error: 'LUMA_API_KEY environment variable is not set. Please add it to your Supabase Edge Function secrets.' 
+          }),
           {
             status: 500,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           }
         );
       }
+
+      console.log(`🔍 Checking status for generation ID: ${generationId}`);
 
       const response = await fetch(`${LUMA_API_URL}/${generationId}`, {
         method: 'GET',
@@ -321,6 +353,7 @@ Deno.serve(async (req: Request) => {
 
       if (!response.ok) {
         const errorText = await response.text();
+        console.error(`❌ Luma status check error (${response.status}):`, errorText);
         return new Response(
           JSON.stringify({ error: `Failed to get generation status: ${response.status} - ${errorText}` }),
           {
@@ -331,6 +364,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const data = await response.json();
+      console.log(`✅ Luma status response:`, JSON.stringify(data, null, 2));
       
       return new Response(
         JSON.stringify(data),
@@ -348,9 +382,12 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (error) {
-    console.error('Edge function error:', error);
+    console.error('❌ Edge function error:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ 
+        error: `Internal server error: ${error.message}`,
+        details: 'Check the function logs for more information'
+      }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
